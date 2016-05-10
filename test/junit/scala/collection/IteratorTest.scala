@@ -154,4 +154,42 @@ class IteratorTest {
     results += (Stream from 1).toIterator.drop(10).toStream.drop(10).toIterator.next()
     assertSameElements(List(1,1,21), results)
   }
+  // SI-9332
+  @Test def spanExhaustsLeadingIterator(): Unit = {
+    def it = Iterator.iterate(0)(_ + 1).take(6)
+    val (x, y) = it.span(_ != 1)
+    val z = x.toList
+    assertEquals(1, z.size)
+    assertFalse(x.hasNext)
+    assertEquals(1, y.next)
+    assertFalse(x.hasNext)   // was true, after advancing underlying iterator
+  }
+  // SI-9623
+  @Test def noExcessiveHasNextInJoinIterator: Unit = {
+    var counter = 0
+    val exp = List(1,2,3,1,2,3)
+    def it: Iterator[Int] = new Iterator[Int] {
+      val parent = List(1,2,3).iterator
+      def next(): Int = parent.next
+      def hasNext: Boolean = { counter += 1; parent.hasNext }
+    }
+    // Iterate separately
+    val res = new mutable.ArrayBuffer[Int]
+    it.foreach(res += _)
+    it.foreach(res += _)
+    assertSameElements(exp, res)
+    assertEquals(8, counter)
+    // JoinIterator
+    counter = 0
+    res.clear
+    (it ++ it).foreach(res += _)
+    assertSameElements(exp, res)
+    assertEquals(8, counter) // was 17
+    // ConcatIterator
+    counter = 0
+    res.clear
+    (Iterator.empty ++ it ++ it).foreach(res += _)
+    assertSameElements(exp, res)
+    assertEquals(8, counter) // was 14
+  }
 }

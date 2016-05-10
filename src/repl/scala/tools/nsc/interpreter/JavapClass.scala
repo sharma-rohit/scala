@@ -8,6 +8,7 @@ package tools.nsc
 package interpreter
 
 import java.lang.{ ClassLoader => JavaClassLoader, Iterable => JIterable }
+import scala.tools.asm.Opcodes
 import scala.tools.nsc.util.ScalaClassLoader
 import java.io.{ ByteArrayInputStream, CharArrayWriter, FileNotFoundException, PrintWriter, StringWriter, Writer }
 import java.util.{ Locale }
@@ -599,11 +600,11 @@ object JavapClass {
     def parents: List[ClassLoader] = parentsOf(loader)
     /* all file locations */
     def locations = {
-      def alldirs = parents flatMap (_ match {
+      def alldirs = parents flatMap {
         case ucl: ScalaClassLoader.URLClassLoader => ucl.classPathURLs
         case jcl: java.net.URLClassLoader         => jcl.getURLs
         case _ => Nil
-      })
+      }
       val dirs = for (d <- alldirs; if d.getProtocol == "file") yield Path(new JFile(d.toURI))
       dirs
     }
@@ -746,44 +747,31 @@ object JavapClass {
       // on second thought, we don't care about lambda method classes, just the impl methods
       val rev =
       res flatMap {
-        case x @ closure(_, "lambda", _, _) => labdaMethod(x, target)
-          //target.member flatMap (_ => labdaMethod(x, target)) getOrElse s"${target.name}#$$anonfun"
+        case x @ closure(_, "lambda", _, _) => lambdaMethod(x, target)
+          //target.member flatMap (_ => lambdaMethod(x, target)) getOrElse s"${target.name}#$$anonfun"
         case x                              => Some(x)
       }
       rev
     }
     // given C$lambda$$g$n for member g and n in 1..N, find the C.accessor$x
     // and the C.$anonfun$x it forwards to.
-    def labdaMethod(lambda: String, target: Target): Option[String] = {
+    def lambdaMethod(lambda: String, target: Target): Option[String] = {
       import scala.tools.asm.ClassReader
       import scala.tools.asm.Opcodes.INVOKESTATIC
       import scala.tools.asm.tree.{ ClassNode, MethodInsnNode }
-      // the accessor methods invoked statically by the apply of the given closure class
-      def accesses(s: String): Seq[(String, String)] = {
-        val accessor = """accessor\$\d+""".r
+      def callees(s: String): List[(String, String)] = {
         loader classReader s withMethods { ms =>
-          ms filter (_.name == "apply") flatMap (_.instructions.toArray.collect {
-            case i: MethodInsnNode if i.getOpcode == INVOKESTATIC && when(i.name) { case accessor(_*) => true } => (i.owner, i.name)
-          })
+          val nonBridgeApplyMethods = ms filter (_.name == "apply") filter (n => (n.access & Opcodes.ACC_BRIDGE) == 0)
+          val instructions = nonBridgeApplyMethods flatMap (_.instructions.toArray)
+          instructions.collect {
+            case i: MethodInsnNode => (i.owner, i.name)
+          }.toList
         }
       }
-      // get the k.$anonfun for the accessor k.m
-      def anonOf(k: String, m: String): String = {
-        val res = 
-          loader classReader k withMethods { ms =>
-            ms filter (_.name == m) flatMap (_.instructions.toArray.collect {
-              case i: MethodInsnNode if i.getOpcode == INVOKESTATIC && i.name.startsWith("$anonfun") => i.name
-            })
-          }
-        assert(res.size == 1)
-        res.head
-      }
-      // the lambdas invoke accessors that call the anonfuns of interest. Filter k on the k#$anonfuns.
-      val ack = accesses(lambda)
-      assert(ack.size == 1)  // There can be only one.
-      ack.head match {
-        case (k, _) if target.isModule && !(k endsWith "$") => None
-        case (k, m)                                         => Some(s"${k}#${anonOf(k, m)}")
+      callees(lambda) match {
+        case (k, _) :: Nil if target.isModule && !(k endsWith "$") => None
+        case (k, m) :: _ => Some(s"${k}#${m}")
+        case _ => None
       }
     }
     /** Translate the supplied targets to patterns for anonfuns.

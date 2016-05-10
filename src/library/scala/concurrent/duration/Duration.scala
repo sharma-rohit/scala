@@ -94,7 +94,7 @@ object Duration {
     timeUnitLabels flatMap { case (unit, names) => expandLabels(names) map (_ -> unit) } toMap
 
   /**
-   * Extract length and time unit out of a string, where the format must match the description for [[Duration$.apply(String):Duration apply(String)]].
+   * Extract length and time unit out of a string, where the format must match the description for [[Duration$.apply(s:String)* apply(String)]].
    * The extractor will not match for malformed strings or non-finite durations.
    */
   def unapply(s: String): Option[(Long, TimeUnit)] =
@@ -182,6 +182,7 @@ object Duration {
     def compare(other: Duration) = if (other eq this) 0 else 1
     def unary_- : Duration = this
     def toUnit(unit: TimeUnit): Double = Double.NaN
+    private def readResolve(): AnyRef = Undefined      // Instructs deserialization to use this same instance
   }
 
   sealed abstract class Infinite extends Duration {
@@ -230,7 +231,7 @@ object Duration {
    * but itself. This value closely corresponds to Double.PositiveInfinity,
    * matching its semantics in arithmetic operations.
    */
-  val Inf: Infinite = new Infinite {
+  val Inf: Infinite = new Infinite  {
     override def toString = "Duration.Inf"
     def compare(other: Duration) = other match {
       case x if x eq Undefined => -1 // Undefined != Undefined
@@ -239,6 +240,7 @@ object Duration {
     }
     def unary_- : Duration = MinusInf
     def toUnit(unit: TimeUnit): Double = Double.PositiveInfinity
+    private def readResolve(): AnyRef = Inf            // Instructs deserialization to use this same instance
   }
 
   /**
@@ -251,6 +253,7 @@ object Duration {
     def compare(other: Duration) = if (other eq this) 0 else -1
     def unary_- : Duration = Inf
     def toUnit(unit: TimeUnit): Double = Double.NegativeInfinity
+    private def readResolve(): AnyRef = MinusInf    // Instructs deserialization to use this same instance
   }
 
   // Java Factories
@@ -352,7 +355,7 @@ object Duration {
  *  - isomorphic to `java.lang.Double` when it comes to infinite or undefined values
  *
  * The conversion between Duration and Double is done using [[Duration.toUnit]] (with unit NANOSECONDS)
- * and [[Duration$.fromNanos(Double):Duration Duration.fromNanos(Double)]].
+ * and [[Duration$.fromNanos(nanos:Double)* Duration.fromNanos(Double)]]
  *
  * <h2>Ordering</h2>
  *

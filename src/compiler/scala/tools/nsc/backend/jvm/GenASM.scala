@@ -9,6 +9,7 @@ package backend.jvm
 
 import scala.collection.{ mutable, immutable }
 import scala.reflect.internal.pickling.{ PickleFormat, PickleBuffer }
+import scala.tools.nsc.backend.jvm.opt.InlineInfoAttribute
 import scala.tools.nsc.symtab._
 import scala.tools.asm
 import asm.Label
@@ -306,7 +307,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
       if (sym.isBridge) ACC_BRIDGE | ACC_SYNTHETIC else 0,
       if (sym.isArtifact) ACC_SYNTHETIC else 0,
       if (sym.isClass && !sym.isInterface) ACC_SUPER else 0,
-      if (sym.hasEnumFlag) ACC_ENUM else 0,
+      if (sym.hasJavaEnumFlag) ACC_ENUM else 0,
       if (sym.isVarargsMethod) ACC_VARARGS else 0,
       if (sym.hasFlag(Flags.SYNCHRONIZED)) ACC_SYNCHRONIZED else 0
     )
@@ -478,10 +479,6 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
     val CLASS_CONSTRUCTOR_NAME    = "<clinit>"
     val INSTANCE_CONSTRUCTOR_NAME = "<init>"
 
-    val INNER_CLASSES_FLAGS =
-      (asm.Opcodes.ACC_PUBLIC    | asm.Opcodes.ACC_PRIVATE | asm.Opcodes.ACC_PROTECTED |
-       asm.Opcodes.ACC_STATIC    | asm.Opcodes.ACC_INTERFACE | asm.Opcodes.ACC_ABSTRACT | asm.Opcodes.ACC_FINAL)
-
     // -----------------------------------------------------------------------------------------
     // factory methods
     // -----------------------------------------------------------------------------------------
@@ -498,8 +495,8 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
      *        generic classes or interfaces.
      *
      * @param superName the internal of name of the super class. For interfaces,
-     *        the super class is {@link Object}. May be <tt>null</tt>, but
-     *        only for the {@link Object} class.
+     *        the super class is [[Object]]. May be <tt>null</tt>, but
+     *        only for the [[Object]] class.
      *
      * @param interfaces the internal names of the class's interfaces (see
      *        {@link Type#getInternalName() getInternalName}). May be
@@ -532,9 +529,13 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
         }
         bytecodeWriter.writeClass(label, jclassName, arr, outF)
       } catch {
-        case e: java.lang.RuntimeException if e != null && (e.getMessage contains "too large!") =>
+        case e: java.lang.RuntimeException if e.getMessage != null && (e.getMessage contains "too large!") =>
           reporter.error(sym.pos,
             s"Could not write class $jclassName because it exceeds JVM code size limits. ${e.getMessage}")
+        case e: java.io.IOException if e.getMessage != null && (e.getMessage contains "File name too long")  =>
+          reporter.error(sym.pos, e.getMessage + "\n" +
+            "This can happen on some encrypted or legacy file systems.  Please see SI-3623 for more details.")
+
       }
     }
 
@@ -616,18 +617,16 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
         val internalName = cachedJN.toString()
         val trackedSym = jsymbol(sym)
         reverseJavaName.get(internalName) match {
-          case Some(oldsym) if oldsym.exists && trackedSym.exists =>
-            assert(
-              // In contrast, neither NothingClass nor NullClass show up bytecode-level.
-              (oldsym == trackedSym) || (oldsym == RuntimeNothingClass) || (oldsym == RuntimeNullClass) || (oldsym.isModuleClass && (oldsym.sourceModule == trackedSym.sourceModule)),
-              s"""|Different class symbols have the same bytecode-level internal name:
-                  |     name: $internalName
-                  |   oldsym: ${oldsym.fullNameString}
-                  |  tracked: ${trackedSym.fullNameString}
-              """.stripMargin
-            )
-          case _ =>
+          case None =>
             reverseJavaName.put(internalName, trackedSym)
+          case Some(oldsym) =>
+            // TODO: `duplicateOk` seems pretty ad-hoc (a more aggressive version caused SI-9356 because it called oldSym.exists, which failed in the unpickler; see also SI-5031)
+            def duplicateOk = oldsym == NoSymbol || trackedSym == NoSymbol || (syntheticCoreClasses contains oldsym) || (oldsym.isModuleClass && (oldsym.sourceModule == trackedSym.sourceModule))
+            if (oldsym != trackedSym && !duplicateOk)
+              devWarning(s"""|Different class symbols have the same bytecode-level internal name:
+                             |     name: $internalName
+                             |   oldsym: ${oldsym.fullNameString}
+                             |  tracked: ${trackedSym.fullNameString}""".stripMargin)
         }
       }
 
@@ -688,7 +687,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
           null
         else {
           val outerName = javaName(innerSym.rawowner)
-          if (isTopLevelModule(innerSym.rawowner)) "" + nme.stripModuleSuffix(newTermName(outerName))
+          if (isTopLevelModule(innerSym.rawowner)) "" + TermName(outerName).dropModule
           else outerName
         }
       }
@@ -757,9 +756,9 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
           val flagsWithFinal: Int = mkFlags(
             // See comment in BTypes, when is a class marked static in the InnerClass table.
             if (isOriginallyStaticOwner(innerSym.originalOwner)) asm.Opcodes.ACC_STATIC else 0,
-            javaFlags(innerSym),
+            (if (innerSym.isJava) javaClassfileFlags(innerSym) else javaFlags(innerSym)) & ~asm.Opcodes.ACC_STATIC,
             if(isDeprecated(innerSym)) asm.Opcodes.ACC_DEPRECATED else 0 // ASM pseudo-access flag
-          ) & (INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
+          ) & (BCodeAsmCommon.INNER_CLASSES_FLAGS | asm.Opcodes.ACC_DEPRECATED)
           val flags = if (innerSym.isModuleClass) flagsWithFinal & ~asm.Opcodes.ACC_FINAL else flagsWithFinal // For SI-5676, object overriding.
           val jname = javaName(innerSym)  // never null
           val oname = outerName(innerSym) // null when method-enclosed
@@ -1291,6 +1290,9 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
       val ssa = getAnnotPickle(thisName, c.symbol)
       jclass.visitAttribute(if(ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
       emitAnnotations(jclass, c.symbol.annotations ++ ssa)
+
+      if (!settings.YskipInlineInfoAttribute.value)
+        jclass.visitAttribute(InlineInfoAttribute(buildInlineInfoFromClassSymbol(c.symbol, javaName, javaType(_).getDescriptor)))
 
       // typestate: entering mode with valid call sequences:
       //   ( visitInnerClass | visitField | visitMethod )* visitEnd
@@ -2050,7 +2052,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
                 seen ::= LocVarEntry(lv, start, end)
               case _ =>
                 // TODO SI-6049 track down the cause for these.
-                debugwarn(s"$iPos: Visited SCOPE_EXIT before visiting corresponding SCOPE_ENTER. SI-6191")
+                devWarning(s"$iPos: Visited SCOPE_EXIT before visiting corresponding SCOPE_ENTER. SI-6191")
             }
           }
 
@@ -2420,7 +2422,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
                 // SI-6102: Determine whether eliding this JUMP results in an empty range being covered by some EH.
                 // If so, emit a NOP in place of the elided JUMP, to avoid "java.lang.ClassFormatError: Illegal exception table range"
               else if (newNormal.isJumpOnly(b) && m.exh.exists(eh => eh.covers(b))) {
-                debugwarn("Had a jump only block that wasn't collapsed")
+                devWarning("Had a jump only block that wasn't collapsed")
                 emit(asm.Opcodes.NOP)
               }
 
@@ -2698,7 +2700,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
               case CMPG =>
                 (kind: @unchecked) match {
                   case FLOAT  => emit(Opcodes.FCMPG)
-                  case DOUBLE => emit(Opcodes.DCMPL) // TODO bug? why not DCMPG? http://docs.oracle.com/javase/specs/jvms/se5.0/html/Instructions2.doc3.html
+                  case DOUBLE => emit(Opcodes.DCMPL) // TODO bug? why not DCMPG? http://docs.oracle.com/javase/specs/jvms/se6/html/Instructions2.doc3.html
 
                 }
             }
@@ -2879,8 +2881,8 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
       var fieldList = List[String]()
 
       for (f <- clasz.fields if f.symbol.hasGetter;
-	         g = f.symbol.getter(clasz.symbol);
-	         s = f.symbol.setter(clasz.symbol)
+                 g = f.symbol.getterIn(clasz.symbol);
+                 s = f.symbol.setterIn(clasz.symbol)
            if g.isPublic && !(f.symbol.name startsWith "$")
           ) {
              // inserting $outer breaks the bean
@@ -3033,7 +3035,7 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
      *
      *  Rationale for this normalization:
      *    test/files/run/private-inline.scala after -optimize is chock full of
-     *    BasicBlocks containing just JUMP(whereTo), where no exception handler straddles them.
+     *    BasicBlocks containing just JUMP(whereto), where no exception handler straddles them.
      *    They should be collapsed by IMethod.normalize() but aren't.
      *    That was fine in FJBG times when by the time the exception table was emitted,
      *    it already contained "anchored" labels (ie instruction offsets were known)
@@ -3132,13 +3134,13 @@ abstract class GenASM extends SubComponent with BytecodeWriters { self =>
         val (remappings, cycles) = detour partition {case (source, target) => source != target}
         for ((source, target) <- remappings) {
 		   debuglog(s"Will elide jump only block $source because it can be jumped around to get to $target.")
-		   if (m.startBlock == source) debugwarn("startBlock should have been re-wired by now")
+                   if (m.startBlock == source) devWarning("startBlock should have been re-wired by now")
         }
         val sources = remappings.keySet
         val targets = remappings.values.toSet
         val intersection = sources intersect targets
 
-        if (intersection.nonEmpty) debugwarn(s"contradiction: we seem to have some source and target overlap in blocks ${intersection.mkString}. Map was ${detour.mkString}")
+        if (intersection.nonEmpty) devWarning(s"contradiction: we seem to have some source and target overlap in blocks ${intersection.mkString}. Map was ${detour.mkString}")
 
         for ((source, _) <- cycles) {
           debuglog(s"Block $source is in a do-nothing infinite loop. Did the user write 'while(true){}'?")

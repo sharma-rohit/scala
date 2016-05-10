@@ -38,9 +38,10 @@ import scala.reflect.ClassTag
  *  `Traversables`, such as folds, conversions, and other operations which
  *  traverse some or all of the elements and return a derived value.
  *  Directly subclassing `TraversableOnce` is not recommended - instead,
- *  consider declaring an `Iterator` with a `next` and `hasNext` method,
- *  creating an `Iterator` with one of the methods on the `Iterator` object,
- *  or declaring a subclass of `Traversable`.
+ *  consider declaring an `Iterator` with a `next` and `hasNext` method or
+ *  creating an `Iterator` with one of the methods on the `Iterator` object.
+ *  Consider declaring a subclass of `Traversable` instead if the elements
+ *  can be traversed repeatedly.
  *
  *  @define coll traversable or iterator
  *  @define orderDependent
@@ -61,7 +62,8 @@ import scala.reflect.ClassTag
 trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
   self =>
 
-  /** Self-documenting abstract methods. */
+  //TODO 2.12: Remove these methods. They are already defined in GenTraversableOnce
+  /* Self-documenting abstract methods. */
   def foreach[U](f: A => U): Unit
   def isEmpty: Boolean
   def hasDefiniteSize: Boolean
@@ -128,8 +130,21 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
    *  @example    `Seq("a", 1, 5L).collectFirst({ case x: Int => x*10 }) = Some(10)`
    */
   def collectFirst[B](pf: PartialFunction[A, B]): Option[B] = {
-    // make sure to use an iterator or `seq`
-    self.toIterator.foreach(pf.runWith(b => return Some(b)))
+    // TODO 2.12 -- move out alternate implementations into child classes
+    val i: Iterator[A] = self match {
+      case it: Iterator[A] => it
+      case _: GenIterable[_] => self.toIterator   // If it might be parallel, be sure to .seq or use iterator!
+      case _ =>                                   // Not parallel, not iterable--just traverse
+        self.foreach(pf.runWith(b => return Some(b)))
+        return None
+    }
+    // Presumably the fastest way to get in and out of a partial function is for a sentinel function to return itself
+    // (Tested to be lower-overhead than runWith.  Would be better yet to not need to (formally) allocate it--change in 2.12.)
+    val sentinel: Function1[A, Any] = new scala.runtime.AbstractFunction1[A, Any]{ def apply(a: A) = this }
+    while (i.hasNext) {
+      val x = pf.applyOrElse(i.next, sentinel)
+      if (x.asInstanceOf[AnyRef] ne sentinel) return Some(x.asInstanceOf[B])
+    }
     None
   }
 
@@ -321,10 +336,10 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
    * {{{
    *      scala> val a = List(1,2,3,4)
    *      a: List[Int] = List(1, 2, 3, 4)
-   *      
+   *
    *      scala> val b = new StringBuilder()
-   *      b: StringBuilder = 
-   *      
+   *      b: StringBuilder =
+   *
    *      scala> a.addString(b , "List(" , ", " , ")")
    *      res5: StringBuilder = List(1, 2, 3, 4)
    * }}}
@@ -363,7 +378,7 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
    * {{{
    *      scala> val a = List(1,2,3,4)
    *      a: List[Int] = List(1, 2, 3, 4)
-   *      
+   *
    *      scala> val b = new StringBuilder()
    *      b: StringBuilder =
    *
@@ -386,7 +401,7 @@ trait TraversableOnce[+A] extends Any with GenTraversableOnce[A] {
    * {{{
    *      scala> val a = List(1,2,3,4)
    *      a: List[Int] = List(1, 2, 3, 4)
-   *      
+   *
    *      scala> val b = new StringBuilder()
    *      b: StringBuilder =
    *

@@ -127,7 +127,7 @@ trait PhaseAssembly {
     }
 
     /* Find all edges in the given graph that are hard links. For each hard link we
-     * need to check that its the only dependency. If not, then we will promote the
+     * need to check that it's the only dependency. If not, then we will promote the
      * other dependencies down
      */
     def validateAndEnforceHardlinks() {
@@ -226,7 +226,7 @@ trait PhaseAssembly {
   }
 
   /** Given the phases set, will build a dependency graph from the phases set
-   *  Using the aux. method of the DependencyGraph to create nodes and egdes.
+   *  Using the aux. method of the DependencyGraph to create nodes and edges.
    */
   private def phasesSetToDepGraph(phsSet: mutable.HashSet[SubComponent]): DependencyGraph = {
     val graph = new DependencyGraph()

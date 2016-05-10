@@ -387,7 +387,7 @@ abstract class TypeFlowAnalysis {
 
       Moreover, it's often the case that the last CALL_METHOD of interest ("of interest" equates to "being tracked in `isOnWatchlist`) isn't the last instruction on the block.
       There are cases where the typeflows computed past this `lastInstruction` are needed, and cases when they aren't.
-      The reasoning behind this decsision is described in `populatePerimeter()`. All `blockTransfer()` needs to do (in order to know at which instruction it can stop)
+      The reasoning behind this decision is described in `populatePerimeter()`. All `blockTransfer()` needs to do (in order to know at which instruction it can stop)
       is querying `isOnPerimeter`.
 
       Upon visiting a CALL_METHOD that's an inlining candidate, the relevant pieces of information about the pre-instruction typestack are collected for future use.
@@ -572,7 +572,7 @@ abstract class TypeFlowAnalysis {
 
         - `inlined` : These blocks were spliced into the method's CFG as part of inlining. Being new blocks, they haven't been visited yet by the typeflow analysis.
 
-        - `staleIn` : These blocks are what `doInline()` calls `afterBlock`s, ie the new home for instructions that previously appearead
+        - `staleIn` : These blocks are what `doInline()` calls `afterBlock`s, ie the new home for instructions that previously appeared
                       after a callsite in a `staleOut` block.
 
       Based on the above information, we have to bring up-to-date the caches that `forwardAnalysis` and `blockTransfer` use to skip blocks and instructions.

@@ -8,6 +8,7 @@ package transform
 
 import scala.collection.{ mutable, immutable }
 import scala.collection.mutable.ListBuffer
+import scala.reflect.internal.util.ListOfNil
 import symtab.Flags._
 
 /** This phase converts classes with parameters into Java-like classes with
@@ -136,7 +137,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
    *       and thus may only be accessed from value or method definitions owned by the current class
    *       (ie there's no point drilling down into nested classes).
    *
-   *   (d) regarding candidates in (b), they are accesible from all places listed in (c) and in addition
+   *   (d) regarding candidates in (b), they are accessible from all places listed in (c) and in addition
    *       from nested classes (nested at any number of levels).
    *
    * In all cases, we're done with traversing as soon as all candidates have been ruled out.
@@ -314,7 +315,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
     }
 
     def rewriteDelayedInit() {
-      /* XXX This is not corect: remainingConstrStats.nonEmpty excludes too much,
+      /* XXX This is not correct: remainingConstrStats.nonEmpty excludes too much,
        * but excluding it includes too much.  The constructor sequence being mimicked
        * needs to be reproduced with total fidelity.
        *
@@ -327,7 +328,7 @@ abstract class Constructors extends Statics with Transform with ast.TreeDSL {
         val delayedHook: DefDef = delayedEndpointDef(remainingConstrStats)
         defBuf += delayedHook
         val hookCallerClass = {
-          // transform to make the closure-class' default constructor assign the the outer instance to its param-accessor field.
+          // transform to make the closure-class' default constructor assign the outer instance to its param-accessor field.
           val drillDown = new ConstructorTransformer(unit)
           drillDown transform delayedInitClosure(delayedHook.symbol.asInstanceOf[MethodSymbol])
         }

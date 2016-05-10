@@ -79,7 +79,7 @@ trait PatternTypers {
       // do not update the symbol if the tree's symbol's type does not define an unapply member
       // (e.g. since it's some method that returns an object with an unapply member)
       val fun         = inPlaceAdHocOverloadingResolution(fun0)(hasUnapplyMember)
-      val caseClass   = fun.tpe.typeSymbol.linkedClassOfClass
+      val caseClass   = companionSymbolOf(fun.tpe.typeSymbol.sourceModule, context)
       val member      = unapplyMember(fun.tpe)
       def resultType  = (fun.tpe memberType member).finalResultType
       def isEmptyType = resultOfMatchingMethod(resultType, nme.isEmpty)()
@@ -268,7 +268,7 @@ trait PatternTypers {
 
       def freshArgType(tp: Type): Type = tp match {
         case MethodType(param :: _, _) => param.tpe
-        case PolyType(tparams, restpe) => createFromClonedSymbols(tparams, freshArgType(restpe))(polyType)
+        case PolyType(tparams, restpe) => createFromClonedSymbols(tparams, freshArgType(restpe))(genPolyType)
         case OverloadedType(_, _)      => OverloadedUnapplyError(fun) ; ErrorType
         case _                         => UnapplyWithSingleArgError(fun) ; ErrorType
       }
@@ -305,7 +305,7 @@ trait PatternTypers {
       // clearing the type is necessary so that ref will be stabilized; see bug 881
       val fun1 = typedPos(fun.pos)(Apply(Select(fun.clearType(), unapplyMethod), unapplyArgTree :: Nil))
 
-      def makeTypedUnApply() = {
+      def makeTypedUnapply() = {
         // the union of the expected type and the inferred type of the argument to unapply
         val glbType        = glb(ensureFullyDefined(pt) :: unapplyArg.tpe_* :: Nil)
         val wrapInTypeTest = canRemedy && !(fun1.symbol.owner isNonBottomSubClass ClassTagClass)
@@ -325,7 +325,7 @@ trait PatternTypers {
         if (isBlackbox(unapplyMethod)) duplErrorTree(BlackboxExtractorExpansion(tree))
         else duplErrorTree(WrongShapeExtractorExpansion(tree))
       } else
-        makeTypedUnApply()
+        makeTypedUnapply()
     }
 
     def wrapClassTagUnapply(uncheckedPattern: Tree, classTagExtractor: Tree, pt: Type): Tree = {

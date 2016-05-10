@@ -106,7 +106,6 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     this.AnnotationInfo
     this.Annotation
     this.UnmappableAnnotation
-    this.ErroneousAnnotation
     this.ThrownException
     this.typeNames
     this.tpnme
@@ -255,6 +254,8 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.JavaEnumClass
     definitions.RemoteInterfaceClass
     definitions.RemoteExceptionClass
+    definitions.JavaUtilMap
+    definitions.JavaUtilHashMap
     definitions.ByNameParamClass
     definitions.JavaRepeatedParamClass
     definitions.RepeatedParamClass
@@ -310,6 +311,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.QuasiquoteClass_api_unapply
     definitions.ScalaSignatureAnnotation
     definitions.ScalaLongSignatureAnnotation
+    definitions.LambdaMetaFactory
     definitions.MethodHandle
     definitions.OptionClass
     definitions.OptionModule
@@ -441,7 +443,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.ScalaValueClassesNoUnit
     definitions.ScalaValueClasses
 
-
+    uncurry.DesugaredParameterType
     erasure.GenericArray
     erasure.scalaErasure
     erasure.specialScalaErasure

@@ -173,7 +173,7 @@ abstract class DeadCodeElimination extends SubComponent {
               moveToWorkList()
 
             case LOAD_FIELD(sym, isStatic) if isStatic || !inliner.isClosureClass(sym.owner) =>
-              // static load may trigger static initization.
+              // static load may trigger static initialization.
               // non-static load can throw NPE (but we know closure fields can't be accessed via a
               // null reference.
               moveToWorkList()
@@ -191,7 +191,7 @@ abstract class DeadCodeElimination extends SubComponent {
                   case LOAD_EXCEPTION(_) | DUP(_) | LOAD_MODULE(_) => true
                   case _ =>
                     dropOf((bb1, idx1)) = (bb,idx) :: dropOf.getOrElse((bb1, idx1), Nil)
-                    debuglog("DROP is innessential: " + i + " because of: " + bb1(idx1) + " at " + bb1 + ":" + idx1)
+                    debuglog("DROP is inessential: " + i + " because of: " + bb1(idx1) + " at " + bb1 + ":" + idx1)
                     false
                 }
               }
@@ -378,7 +378,7 @@ abstract class DeadCodeElimination extends SubComponent {
           } else {
             i match {
               case NEW(REFERENCE(sym)) =>
-                log(s"Eliminated instantation of $sym inside $m")
+                log(s"Eliminated instantiation of $sym inside $m")
               case STORE_LOCAL(l) if clobbers contains ((bb, idx)) =>
                 // if an unused instruction was a clobber of a used store to a reference or array type
                 // then we'll replace it with the store of a null to make sure the reference is

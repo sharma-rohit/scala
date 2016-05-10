@@ -469,7 +469,7 @@ trait Types {
     def unapply(tpe: SingleType): Option[(Type, Symbol)]
 
     /** @see [[InternalApi.singleType]] */
-    @deprecated("Use `ClassSymbol.thisPrefix` or `internal.singleType` instead")
+    @deprecated("Use `ClassSymbol.thisPrefix` or `internal.singleType` instead", "2.11.0")
     def apply(pre: Type, sym: Symbol)(implicit token: CompatToken): Type = internal.singleType(pre, sym)
   }
 
@@ -588,7 +588,7 @@ trait Types {
   /** An extractor class to create and pattern match with syntax `TypeRef(pre, sym, args)`
    *  Here, `pre` is the prefix of the type reference, `sym` is the symbol
    *  referred to by the type reference, and `args` is a possible empty list of
-   *  type argumenrts.
+   *  type arguments.
    *  @group Extractors
    */
   abstract class TypeRefExtractor {

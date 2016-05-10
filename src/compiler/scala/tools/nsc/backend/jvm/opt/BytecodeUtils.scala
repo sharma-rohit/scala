@@ -10,11 +10,22 @@ package opt
 import scala.annotation.{tailrec, switch}
 import scala.collection.mutable
 import scala.reflect.internal.util.Collections._
-import scala.tools.asm.Opcodes
+import scala.tools.asm.commons.CodeSizeEvaluator
+import scala.tools.asm.tree.analysis._
+import scala.tools.asm.{MethodWriter, ClassWriter, Label, Opcodes, Type}
 import scala.tools.asm.tree._
+import GenBCode._
 import scala.collection.convert.decorateAsScala._
+import scala.collection.convert.decorateAsJava._
+import scala.tools.nsc.backend.jvm.BTypes._
 
 object BytecodeUtils {
+
+  // http://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.9.1
+  final val maxJVMMethodSize         = 65535
+
+  // 5% margin, more than enough for the instructions added by the inliner (store / load args, null check for instance methods)
+  final val maxMethodSizeAfterInline = maxJVMMethodSize - (maxJVMMethodSize / 20)
 
   object Goto {
     def unapply(instruction: AbstractInsnNode): Option[JumpInsnNode] = {
@@ -61,12 +72,39 @@ object BytecodeUtils {
     op >= Opcodes.IRETURN && op <= Opcodes.RETURN
   }
 
-  def isVarInstruction(instruction: AbstractInsnNode): Boolean = {
+  def isLoad(instruction: AbstractInsnNode): Boolean = {
     val op = instruction.getOpcode
-    (op >= Opcodes.ILOAD  && op <= Opcodes.ALOAD) || (op >= Opcodes.ISTORE && op <= Opcodes.ASTORE)
+    op >= Opcodes.ILOAD  && op <= Opcodes.ALOAD
   }
 
+  def isStore(instruction: AbstractInsnNode): Boolean = {
+    val op = instruction.getOpcode
+    op >= Opcodes.ISTORE && op <= Opcodes.ASTORE
+  }
+
+  def isVarInstruction(instruction: AbstractInsnNode): Boolean = isLoad(instruction) || isStore(instruction)
+
   def isExecutable(instruction: AbstractInsnNode): Boolean = instruction.getOpcode >= 0
+
+  def isConstructor(methodNode: MethodNode): Boolean = {
+    methodNode.name == INSTANCE_CONSTRUCTOR_NAME || methodNode.name == CLASS_CONSTRUCTOR_NAME
+  }
+
+  def isStaticMethod(methodNode: MethodNode): Boolean = (methodNode.access & Opcodes.ACC_STATIC) != 0
+
+  def isAbstractMethod(methodNode: MethodNode): Boolean = (methodNode.access & Opcodes.ACC_ABSTRACT) != 0
+
+  def isSynchronizedMethod(methodNode: MethodNode): Boolean = (methodNode.access & Opcodes.ACC_SYNCHRONIZED) != 0
+
+  def isNativeMethod(methodNode: MethodNode): Boolean = (methodNode.access & Opcodes.ACC_NATIVE) != 0
+
+  def isFinalClass(classNode: ClassNode): Boolean = (classNode.access & Opcodes.ACC_FINAL) != 0
+
+  def isFinalMethod(methodNode: MethodNode): Boolean = (methodNode.access & (Opcodes.ACC_FINAL | Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC)) != 0
+
+  def isStrictfpMethod(methodNode: MethodNode): Boolean = (methodNode.access & Opcodes.ACC_STRICT) != 0
+
+  def isReference(t: Type) = t.getSort == Type.OBJECT || t.getSort == Type.ARRAY
 
   def nextExecutableInstruction(instruction: AbstractInsnNode, alsoKeep: AbstractInsnNode => Boolean = Set()): Option[AbstractInsnNode] = {
     var result = instruction
@@ -76,7 +114,7 @@ object BytecodeUtils {
   }
 
   def sameTargetExecutableInstruction(a: JumpInsnNode, b: JumpInsnNode): Boolean = {
-    // Compare next executable instead of the the labels. Identifies a, b as the same target:
+    // Compare next executable instead of the labels. Identifies a, b as the same target:
     //   LabelNode(a)
     //   LabelNode(b)
     //   Instr
@@ -140,6 +178,8 @@ object BytecodeUtils {
     new InsnNode(op)
   }
 
+  def instructionResultSize(instruction: AbstractInsnNode) = InstructionResultSize(instruction)
+
   def labelReferences(method: MethodNode): Map[LabelNode, Set[AnyRef]] = {
     val res = mutable.Map.empty[LabelNode, Set[AnyRef]]
     def add(l: LabelNode, ref: AnyRef) = if (res contains l) res(l) = res(l) + ref else res(l) = Set(ref)
@@ -179,6 +219,177 @@ object BytecodeUtils {
         if (handler.start == from) handler.start = to
         if (handler.handler == from) handler.handler = to
         if (handler.end == from) handler.end = to
+    }
+  }
+
+  /**
+   * In order to run an Analyzer, the maxLocals / maxStack fields need to be available. The ASM
+   * framework only computes these values during bytecode generation.
+   *
+   * Since there's currently no better way, we run a bytecode generator on the method and extract
+   * the computed values. This required changes to the ASM codebase:
+   *   - the [[MethodWriter]] class was made public
+   *   - accessors for maxLocals / maxStack were added to the MethodWriter class
+   *
+   * We could probably make this faster (and allocate less memory) by hacking the ASM framework
+   * more: create a subclass of MethodWriter with a /dev/null byteVector. Another option would be
+   * to create a separate visitor for computing those values, duplicating the functionality from the
+   * MethodWriter.
+   */
+  def computeMaxLocalsMaxStack(method: MethodNode): Unit = {
+    val cw = new ClassWriter(ClassWriter.COMPUTE_MAXS)
+    val excs = method.exceptions.asScala.toArray
+    val mw = cw.visitMethod(method.access, method.name, method.desc, method.signature, excs).asInstanceOf[MethodWriter]
+    method.accept(mw)
+    method.maxLocals = mw.getMaxLocals
+    method.maxStack = mw.getMaxStack
+  }
+
+  def codeSizeOKForInlining(caller: MethodNode, callee: MethodNode): Boolean = {
+    // Looking at the implementation of CodeSizeEvaluator, all instructions except tableswitch and
+    // lookupswitch are <= 8 bytes. These should be rare enough for 8 to be an OK rough upper bound.
+    def roughUpperBound(methodNode: MethodNode): Int = methodNode.instructions.size * 8
+
+    def maxSize(methodNode: MethodNode): Int = {
+      val eval = new CodeSizeEvaluator(null)
+      methodNode.accept(eval)
+      eval.getMaxSize
+    }
+
+    (roughUpperBound(caller) + roughUpperBound(callee) > maxMethodSizeAfterInline) &&
+      (maxSize(caller) + maxSize(callee) > maxMethodSizeAfterInline)
+  }
+
+  def removeLineNumberNodes(classNode: ClassNode): Unit = {
+    for (m <- classNode.methods.asScala) removeLineNumberNodes(m.instructions)
+  }
+
+  def removeLineNumberNodes(instructions: InsnList): Unit = {
+    val iter = instructions.iterator()
+    while (iter.hasNext) iter.next() match {
+      case _: LineNumberNode => iter.remove()
+      case _ =>
+    }
+  }
+
+  def cloneLabels(methodNode: MethodNode): Map[LabelNode, LabelNode] = {
+    methodNode.instructions.iterator().asScala.collect({
+      case labelNode: LabelNode => (labelNode, newLabelNode)
+    }).toMap
+  }
+
+  /**
+   * Create a new [[LabelNode]] with a correctly associated [[Label]].
+   */
+  def newLabelNode: LabelNode = {
+    val label = new Label
+    val labelNode = new LabelNode(label)
+    label.info = labelNode
+    labelNode
+  }
+
+  /**
+   * Clone the instructions in `methodNode` into a new [[InsnList]], mapping labels according to
+   * the `labelMap`. Returns the new instruction list and a map from old to new instructions.
+   */
+  def cloneInstructions(methodNode: MethodNode, labelMap: Map[LabelNode, LabelNode]): (InsnList, Map[AbstractInsnNode, AbstractInsnNode]) = {
+    val javaLabelMap = labelMap.asJava
+    val result = new InsnList
+    var map = Map.empty[AbstractInsnNode, AbstractInsnNode]
+    for (ins <- methodNode.instructions.iterator.asScala) {
+      val cloned = ins.clone(javaLabelMap)
+      result add cloned
+      map += ((ins, cloned))
+    }
+    (result, map)
+  }
+
+  /**
+   * Clone the local variable descriptors of `methodNode` and map their `start` and `end` labels
+   * according to the `labelMap`.
+   */
+  def cloneLocalVariableNodes(methodNode: MethodNode, labelMap: Map[LabelNode, LabelNode], prefix: String): List[LocalVariableNode] = {
+    methodNode.localVariables.iterator().asScala.map(localVariable => new LocalVariableNode(
+      prefix + localVariable.name,
+      localVariable.desc,
+      localVariable.signature,
+      labelMap(localVariable.start),
+      labelMap(localVariable.end),
+      localVariable.index
+    )).toList
+  }
+
+  /**
+   * Clone the local try/catch blocks of `methodNode` and map their `start` and `end` and `handler`
+   * labels according to the `labelMap`.
+   */
+  def cloneTryCatchBlockNodes(methodNode: MethodNode, labelMap: Map[LabelNode, LabelNode]): List[TryCatchBlockNode] = {
+    methodNode.tryCatchBlocks.iterator().asScala.map(tryCatch => new TryCatchBlockNode(
+      labelMap(tryCatch.start),
+      labelMap(tryCatch.end),
+      labelMap(tryCatch.handler),
+      tryCatch.`type`
+    )).toList
+  }
+
+  /**
+   * This method is used by optimizer components to eliminate phantom values of instruction
+   * that load a value of type `Nothing$` or `Null$`. Such values on the stack don't interact well
+   * with stack map frames.
+   *
+   * For example, `opt.getOrElse(throw e)` is re-written to an invocation of the lambda body, a
+   * method with return type `Nothing$`. Similarly for `opt.getOrElse(null)` and `Null$`.
+   *
+   * During bytecode generation this is handled by BCodeBodyBuilder.adapt. See the comment in that
+   * method which explains the issue with such phantom values.
+   */
+  def fixLoadedNothingOrNullValue(loadedType: Type, loadInstr: AbstractInsnNode, methodNode: MethodNode, bTypes: BTypes): Unit = {
+    if (loadedType == bTypes.coreBTypes.RT_NOTHING.toASMType) {
+      methodNode.instructions.insert(loadInstr, new InsnNode(Opcodes.ATHROW))
+    } else if (loadedType == bTypes.coreBTypes.RT_NULL.toASMType) {
+      methodNode.instructions.insert(loadInstr, new InsnNode(Opcodes.ACONST_NULL))
+      methodNode.instructions.insert(loadInstr, new InsnNode(Opcodes.POP))
+    }
+  }
+
+  /**
+   * A wrapper to make ASM's Analyzer a bit easier to use.
+   */
+  class AsmAnalyzer[V <: Value](methodNode: MethodNode, classInternalName: InternalName, interpreter: Interpreter[V] = new BasicInterpreter) {
+    val analyzer = new Analyzer(interpreter)
+    analyzer.analyze(classInternalName, methodNode)
+    def frameAt(instruction: AbstractInsnNode): Frame[V] = analyzer.frameAt(instruction, methodNode)
+  }
+
+  implicit class AnalyzerExtensions[V <: Value](val analyzer: Analyzer[V]) extends AnyVal {
+    def frameAt(instruction: AbstractInsnNode, methodNode: MethodNode): Frame[V] = analyzer.getFrames()(methodNode.instructions.indexOf(instruction))
+  }
+
+  implicit class FrameExtensions[V <: Value](val frame: Frame[V]) extends AnyVal {
+    /**
+     * The value `n` positions down the stack.
+     */
+    def peekStack(n: Int): V = frame.getStack(frame.getStackSize - 1 - n)
+
+    /**
+     * The index of the current stack top.
+     */
+    def stackTop = frame.getLocals + frame.getStackSize - 1
+
+    /**
+     * Gets the value at slot i, where i may be a local or a stack index.
+     */
+    def getValue(i: Int): V = {
+      if (i < frame.getLocals) frame.getLocal(i)
+      else frame.getStack(i - frame.getLocals)
+    }
+
+    /**
+     * Sets the value at slot i, where i may be a local or a stack index.
+     */
+    def setValue(i: Int, value: V): Unit = {
+      if (i < frame.getLocals) frame.setLocal(i, value)
+      else frame.setStack(i - frame.getLocals, value)
     }
   }
 }

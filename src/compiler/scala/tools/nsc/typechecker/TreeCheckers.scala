@@ -262,7 +262,14 @@ abstract class TreeCheckers extends Analyzer {
         checkedTyped(tree, mode, pt)
     )
     private def checkedTyped(tree: Tree, mode: Mode, pt: Type): Tree = {
-      val typed = wrap(tree)(super.typed(tree, mode, pt))
+      val typed = wrap(tree)(super.typed(tree.clearType(), mode, pt))
+
+      // Vlad: super.typed returns null for package defs, why is that?
+      if (typed eq null)
+        return tree
+
+      if (typed.tpe ne null)
+        assert(!typed.tpe.isErroneous, "Tree has erroneous type: " + typed)
 
       if (tree ne typed)
         treesDiffer(tree, typed)
@@ -300,8 +307,8 @@ abstract class TreeCheckers extends Analyzer {
                   checkSym(tree)
                   /* XXX: lots of syms show up here with accessed == NoSymbol. */
                   if (accessed != NoSymbol) {
-                    val agetter = accessed.getter(sym.owner)
-                    val asetter = accessed.setter(sym.owner)
+                    val agetter = accessed.getterIn(sym.owner)
+                    val asetter = accessed.setterIn(sym.owner)
 
                     assertFn(agetter == sym || asetter == sym,
                       sym + " is getter or setter, but accessed sym " + accessed + " shows " + agetter + " and " + asetter
@@ -311,7 +318,7 @@ abstract class TreeCheckers extends Analyzer {
             }
           case ValDef(_, _, _, _) =>
             if (sym.hasGetter && !sym.isOuterField && !sym.isOuterAccessor) {
-              assertFn(sym.getter(sym.owner) != NoSymbol, ownerstr(sym) + " has getter but cannot be found. " + sym.ownerChain)
+              assertFn(sym.getterIn(sym.owner) != NoSymbol, ownerstr(sym) + " has getter but cannot be found. " + sym.ownerChain)
             }
           case Apply(fn, args) =>
             if (args exists (_ == EmptyTree))

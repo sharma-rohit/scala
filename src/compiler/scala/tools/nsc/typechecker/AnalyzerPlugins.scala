@@ -57,7 +57,7 @@ trait AnalyzerPlugins { self: Analyzer =>
      * `analyzer.transformed` hash map, indexed by the definition's rhs tree.
      *
      * NOTE: Invoking the type checker can lead to cyclic reference errors. For instance, if this
-     * method is called from the type completer of a recursive method, type checking the mehtod
+     * method is called from the type completer of a recursive method, type checking the method
      * rhs will invoke the same completer again. It might be possible to avoid this situation by
      * assigning `tpe` to `defTree.symbol` (untested) - the final type computed by this method
      * will then be assigned to the definition's symbol by monoTypeCompleter (in Namers).
@@ -65,7 +65,7 @@ trait AnalyzerPlugins { self: Analyzer =>
      * The hooks into `typeSig` allow analyzer plugins to add annotations to (or change the types
      * of) definition symbols. This cannot not be achieved by using `pluginsTyped`: this method
      * is only called during type checking, so changing the type of a symbol at this point is too
-     * late: references to the symbol might already be typed and therefore obtain the the original
+     * late: references to the symbol might already be typed and therefore obtain the original
      * type assigned during naming.
      *
      * @param defTree is the definition for which the type was computed. The different cases are

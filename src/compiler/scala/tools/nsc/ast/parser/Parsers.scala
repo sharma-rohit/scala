@@ -13,7 +13,7 @@ import scala.collection.{ mutable, immutable }
 import mutable.{ ListBuffer, StringBuilder }
 import scala.reflect.internal.{ Precedence, ModifierFlags => Flags }
 import scala.reflect.internal.Chars.{ isScalaLetter }
-import scala.reflect.internal.util.{ SourceFile, Position, FreshNameCreator }
+import scala.reflect.internal.util.{ SourceFile, Position, FreshNameCreator, ListOfNil }
 import Tokens._
 
 /** Historical note: JavaParsers started life as a direct copy of Parsers
@@ -766,7 +766,58 @@ self =>
     @inline final def caseSeparated[T](part: => T): List[T] = tokenSeparated(CASE, sepFirst = true, part)
     def readAnnots(part: => Tree): List[Tree] = tokenSeparated(AT, sepFirst = true, part)
 
-/* --------- OPERAND/OPERATOR STACK --------------------------------------- */
+    /** Create a tuple type Tree. If the arity is not supported, a syntax error is emitted. */
+    def makeSafeTupleType(elems: List[Tree], offset: Offset) = {
+      if (checkTupleSize(elems, offset)) makeTupleType(elems)
+      else makeTupleType(Nil) // create a dummy node; makeTupleType(elems) would fail
+    }
+
+    /** Create a tuple term Tree. If the arity is not supported, a syntax error is emitted. */
+    def makeSafeTupleTerm(elems: List[Tree], offset: Offset) = {
+      checkTupleSize(elems, offset)
+      makeTupleTerm(elems)
+    }
+
+    private[this] def checkTupleSize(elems: List[Tree], offset: Offset): Boolean =
+      if (elems.lengthCompare(definitions.MaxTupleArity) > 0) {
+        syntaxError(offset, "too many elements for tuple: "+elems.length+", allowed: "+definitions.MaxTupleArity, skipIt = false)
+        false
+      } else true
+
+    /** Strip the artifitial `Parens` node to create a tuple term Tree. */
+    def stripParens(t: Tree) = t match {
+      case Parens(ts) => atPos(t.pos) { makeSafeTupleTerm(ts, t.pos.point) }
+      case _ => t
+    }
+
+    /** Create tree representing (unencoded) binary operation expression or pattern. */
+    def makeBinop(isExpr: Boolean, left: Tree, op: TermName, right: Tree, opPos: Position, targs: List[Tree] = Nil): Tree = {
+      require(isExpr || targs.isEmpty || targs.exists(_.isErroneous), s"Incompatible args to makeBinop: !isExpr but targs=$targs")
+
+      def mkSelection(t: Tree) = {
+        def sel = atPos(opPos union t.pos)(Select(stripParens(t), op.encode))
+        if (targs.isEmpty) sel else atPos(left.pos)(TypeApply(sel, targs))
+      }
+      def mkNamed(args: List[Tree]) = if (isExpr) args map treeInfo.assignmentToMaybeNamedArg else args
+      val arguments = right match {
+        case Parens(args) => mkNamed(args)
+        case _            => List(right)
+      }
+      if (isExpr) {
+        if (treeInfo.isLeftAssoc(op)) {
+          Apply(mkSelection(left), arguments)
+        } else {
+          val x = freshTermName()
+          Block(
+            List(ValDef(Modifiers(symtab.Flags.SYNTHETIC | symtab.Flags.ARTIFACT), x, TypeTree(), stripParens(left))),
+            Apply(mkSelection(right), List(Ident(x))))
+        }
+      } else {
+        Apply(Ident(op.encode), stripParens(left) :: arguments)
+      }
+    }
+
+    /* --------- OPERAND/OPERATOR STACK --------------------------------------- */
 
     /** Modes for infix types. */
     object InfixMode extends Enumeration {
@@ -870,7 +921,7 @@ self =>
             atPos(start, in.skipToken()) { makeFunctionTypeTree(ts, typ()) }
           else {
             ts foreach checkNotByNameOrVarargs
-            val tuple = atPos(start) { makeTupleType(ts) }
+            val tuple = atPos(start) { makeSafeTupleType(ts, start) }
             infixTypeRest(
               compoundTypeRest(
                 annotTypeRest(
@@ -937,7 +988,7 @@ self =>
       def simpleType(): Tree = {
         val start = in.offset
         simpleTypeRest(in.token match {
-          case LPAREN   => atPos(start)(makeTupleType(inParens(types())))
+          case LPAREN   => atPos(start)(makeSafeTupleType(inParens(types()), start))
           case USCORE   => wildcardType(in.skipToken())
           case _        =>
             path(thisOK = false, typeOK = true) match {
@@ -1259,7 +1310,7 @@ self =>
         atPos(start) { Apply(t3, exprsBuf.toList) }
       }
       if (inPattern) stringCheese
-      else withPlaceholders(stringCheese, isAny = true) // strinterpolator params are Any* by definition
+      else withPlaceholders(stringCheese, isAny = true) // string interpolator params are Any* by definition
     }
 
 /* ------------- NEW LINES ------------------------------------------------- */
@@ -2031,11 +2082,11 @@ self =>
     /** Drop `private` modifier when followed by a qualifier.
      *  Contract `abstract` and `override` to ABSOVERRIDE
      */
-    private def normalizeModifers(mods: Modifiers): Modifiers =
+    private def normalizeModifiers(mods: Modifiers): Modifiers =
       if (mods.isPrivate && mods.hasAccessBoundary)
-        normalizeModifers(mods &~ Flags.PRIVATE)
+        normalizeModifiers(mods &~ Flags.PRIVATE)
       else if (mods hasAllFlags (Flags.ABSTRACT | Flags.OVERRIDE))
-        normalizeModifers(mods &~ (Flags.ABSTRACT | Flags.OVERRIDE) | Flags.ABSOVERRIDE)
+        normalizeModifiers(mods &~ (Flags.ABSTRACT | Flags.OVERRIDE) | Flags.ABSOVERRIDE)
       else
         mods
 
@@ -2080,7 +2131,7 @@ self =>
      *  AccessModifier ::= (private | protected) [AccessQualifier]
      *  }}}
      */
-    def accessModifierOpt(): Modifiers = normalizeModifers {
+    def accessModifierOpt(): Modifiers = normalizeModifiers {
       in.token match {
         case m @ (PRIVATE | PROTECTED)  => in.nextToken() ; accessQualifierOpt(Modifiers(flagTokens(m)))
         case _                          => NoMods
@@ -2094,7 +2145,7 @@ self =>
      *              |  override
      *  }}}
      */
-    def modifiers(): Modifiers = normalizeModifers {
+    def modifiers(): Modifiers = normalizeModifiers {
       def loop(mods: Modifiers): Modifiers = in.token match {
         case PRIVATE | PROTECTED =>
           loop(accessQualifierOpt(addMod(mods, flagTokens(in.token), tokenRange(in))))
@@ -2680,7 +2731,10 @@ self =>
           case t if t == SUPERTYPE || t == SUBTYPE || t == COMMA || t == RBRACE || isStatSep(t) =>
             TypeDef(mods | Flags.DEFERRED, name, tparams, typeBounds())
           case _ =>
-            syntaxErrorOrIncompleteAnd("`=', `>:', or `<:' expected", skipIt = true)(EmptyTree)
+            syntaxErrorOrIncompleteAnd("`=', `>:', or `<:' expected", skipIt = true)(
+              // assume a dummy type def so as to have somewhere to stash the annotations
+              TypeDef(mods, tpnme.ERROR, Nil, EmptyTree)
+            )
         }
       }
     }
@@ -2713,7 +2767,10 @@ self =>
         case CASEOBJECT =>
           objectDef(pos, (mods | Flags.CASE) withPosition (Flags.CASE, tokenRange(in.prev /*scanner skips on 'case' to 'object', thus take prev*/)))
         case _ =>
-          syntaxErrorOrIncompleteAnd("expected start of definition", skipIt = true)(EmptyTree)
+          syntaxErrorOrIncompleteAnd("expected start of definition", skipIt = true)(
+            // assume a class definition so as to have somewhere to stash the annotations
+            atPos(pos)(gen.mkClassDef(mods, tpnme.ERROR, Nil, Template(Nil, noSelfType, Nil)))
+          )
       }
     }
 
@@ -2788,7 +2845,7 @@ self =>
      */
     def packageObjectDef(start: Offset): PackageDef = {
       val defn   = objectDef(in.offset, NoMods)
-      val pidPos = o2p(defn.pos.startOrPoint)
+      val pidPos = o2p(defn.pos.start)
       val pkgPos = r2p(start, pidPos.point)
       gen.mkPackageObject(defn, pidPos, pkgPos)
     }

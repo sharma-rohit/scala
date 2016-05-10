@@ -3,13 +3,14 @@ package typechecker
 
 import java.lang.Math.min
 import symtab.Flags._
-import scala.tools.nsc.util._
+import scala.reflect.internal.util.ScalaClassLoader
 import scala.reflect.runtime.ReflectionUtils
 import scala.collection.mutable.ListBuffer
 import scala.reflect.ClassTag
 import scala.reflect.internal.util.Statistics
 import scala.reflect.macros.util._
 import scala.util.control.ControlThrowable
+import scala.reflect.internal.util.ListOfNil
 import scala.reflect.macros.runtime.{AbortMacroException, MacroRuntimes}
 import scala.reflect.runtime.{universe => ru}
 import scala.reflect.macros.compiler.DefaultMacroCompiler
@@ -54,6 +55,13 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
 
   def globalSettings = global.settings
 
+  /** Obtains a `ClassLoader` instance used for macro expansion.
+   *
+   *  By default a new `ScalaClassLoader` is created using the classpath
+   *  from global and the classloader of self as parent.
+   *
+   *  Mirrors with runtime definitions (e.g. Repl) need to adjust this method.
+   */
   protected def findMacroClassLoader(): ClassLoader = {
     val classpath = global.classPath.asURLs
     macroLogVerbose("macro classloader: initializing from -cp: %s".format(classpath))
@@ -84,9 +92,9 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
    */
   case class MacroImplBinding(
       // Is this macro impl a bundle (a trait extending *box.Macro) or a vanilla def?
-      val isBundle: Boolean,
+      isBundle: Boolean,
       // Is this macro impl blackbox (i.e. having blackbox.Context in its signature)?
-      val isBlackbox: Boolean,
+      isBlackbox: Boolean,
       // Java class name of the class that contains the macro implementation
       // is used to load the corresponding object with Java reflection
       className: String,
@@ -657,7 +665,7 @@ trait Macros extends MacroRuntimes with Traces with Helpers {
       //
       // Situation #2 requires measures to be taken. If we're in it, then noone's going to help us infer
       // the undetermined type params. Therefore we need to do something ourselves or otherwise this
-      // expandee will forever remaing not expanded (see SI-5692). A traditional way out of this conundrum
+      // expandee will forever remain not expanded (see SI-5692). A traditional way out of this conundrum
       // is to call `instantiate` and let the inferencer try to find the way out. It works for simple cases,
       // but sometimes, if the inferencer lacks information, it will be forced to approximate.
       //

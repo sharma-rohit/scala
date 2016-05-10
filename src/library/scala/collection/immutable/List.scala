@@ -16,7 +16,7 @@ import scala.annotation.tailrec
 import java.io._
 
 /** A class for immutable linked lists representing ordered collections
- *  of elements of type.
+ *  of elements of type `A`.
  *
  *  This class comes with two implementing case classes `scala.Nil`
  *  and `scala.::` that implement the abstract members `isEmpty`,
@@ -24,6 +24,19 @@ import java.io._
  *
  *  This class is optimal for last-in-first-out (LIFO), stack-like access patterns. If you need another access
  *  pattern, for example, random access or FIFO, consider using a collection more suited to this than `List`.
+ *
+ *  ==Performance==
+ *  '''Time:''' `List` has `O(1)` prepend and head/tail access. Most other operations are `O(n)` on the number of elements in the list.
+ *  This includes the index-based lookup of elements, `length`, `append` and `reverse`.
+ *
+ *  '''Space:''' `List` implements '''structural sharing''' of the tail list. This means that many operations are either
+ *  zero- or constant-memory cost.
+ *  {{{
+ *  val mainList = List(3, 2, 1)
+ *  val with4 =    4 :: mainList  // re-uses mainList, costs one :: instance
+ *  val with42 =   42 :: mainList // also re-uses mainList, cost one :: instance
+ *  val shorter =  mainList.tail  // costs nothing as it uses the same 2::1::Nil instances as mainList
+ *  }}}
  *
  *  @example {{{
  *  // Make a list via the companion object factory
@@ -39,19 +52,6 @@ import java.io._
  *    case List() =>
  *      println("There don't seem to be any week days.")
  *  }
- *  }}}
- *
- *  ==Performance==
- *  '''Time:''' `List` has `O(1)` prepend and head/tail access. Most other operations are `O(n)` on the number of elements in the list.
- *  This includes the index-based lookup of elements, `length`, `append` and `reverse`.
- *
- *  '''Space:''' `List` implements '''structural sharing''' of the tail list. This means that many operations are either
- *  zero- or constant-memory cost.
- *  {{{
- *  val mainList = List(3, 2, 1)
- *  val with4 =    4 :: mainList  // re-uses mainList, costs one :: instance
- *  val with42 =   42 :: mainList // also re-uses mainList, cost one :: instance
- *  val shorter =  mainList.tail  // costs nothing as it uses the same 2::1::Nil instances as mainList
  *  }}}
  *
  *  @note The functional list is characterized by persistence and structural sharing, thus offering considerable
@@ -462,6 +462,7 @@ object List extends SeqFactory[List] {
   private class SerializationProxy[A](@transient private var orig: List[A]) extends Serializable {
 
     private def writeObject(out: ObjectOutputStream) {
+      out.defaultWriteObject()
       var xs: List[A] = orig
       while (!xs.isEmpty) {
         out.writeObject(xs.head)
@@ -473,6 +474,7 @@ object List extends SeqFactory[List] {
     // Java serialization calls this before readResolve during de-serialization.
     // Read the whole list and store it in `orig`.
     private def readObject(in: ObjectInputStream) {
+      in.defaultReadObject()
       val builder = List.newBuilder[A]
       while (true) in.readObject match {
         case ListSerializeEnd =>

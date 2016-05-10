@@ -322,6 +322,7 @@ trait SyntheticMethods extends ast.TreeDSL {
          clazz.isModuleClass
       && clazz.isSerializable
       && !hasConcreteImpl(nme.readResolve)
+      && clazz.isStatic
     )
 
     def synthesize(): List[Tree] = {
@@ -344,7 +345,7 @@ trait SyntheticMethods extends ast.TreeDSL {
               // Without a means to suppress this warning, I've thought better of it.
               if (settings.warnValueOverrides) {
                  (clazz.info nonPrivateMember m.name) filter (m => (m.owner != AnyClass) && (m.owner != clazz) && !m.isDeferred) andAlso { m =>
-                   currentUnit.warning(clazz.pos, s"Implementation of ${m.name} inherited from ${m.owner} overridden in $clazz to enforce value class semantics")
+                   typer.context.warning(clazz.pos, s"Implementation of ${m.name} inherited from ${m.owner} overridden in $clazz to enforce value class semantics")
                  }
                }
               true

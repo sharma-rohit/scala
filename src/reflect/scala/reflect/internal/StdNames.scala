@@ -870,7 +870,7 @@ trait StdNames {
     val toFloat: NameType  = "toFloat"
     val toDouble: NameType = "toDouble"
 
-    // primitive operation methods for structual types mostly
+    // primitive operation methods for structural types mostly
     // overlap with the above, but not for these two.
     val toCharacter: NameType = "toCharacter"
     val toInteger: NameType   = "toInteger"
@@ -1166,6 +1166,8 @@ trait StdNames {
     final val GetMethod: TermName        = newTermName("getMethod")
     final val Invoke: TermName           = newTermName("invoke")
     final val InvokeExact: TermName      = newTermName("invokeExact")
+
+    final val AltMetafactory: TermName      = newTermName("altMetafactory")
 
     val Boxed = immutable.Map[TypeName, TypeName](
       tpnme.Boolean -> BoxedBoolean,

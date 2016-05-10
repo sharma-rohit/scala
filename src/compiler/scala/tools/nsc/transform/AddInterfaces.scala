@@ -55,7 +55,7 @@ abstract class AddInterfaces extends InfoTransform { self: Erasure =>
   )
 
   /** Does symbol need an implementation method? */
-  private def needsImplMethod(sym: Symbol) = (
+  def needsImplMethod(sym: Symbol) = (
        sym.isMethod
     && isInterfaceMember(sym)
     && (!sym.hasFlag(DEFERRED | SUPERACCESSOR) || (sym hasFlag lateDEFERRED))
@@ -111,7 +111,7 @@ abstract class AddInterfaces extends InfoTransform { self: Erasure =>
     impl setInfo new LazyImplClassType(iface)
   }
 
-  /** Return the implementation class of a trait; create a new one of one does not yet exist */
+  /** Return the implementation class of a trait; create a new one if one does not yet exist */
   def implClass(iface: Symbol): Symbol = {
     iface.info
 
@@ -207,7 +207,7 @@ abstract class AddInterfaces extends InfoTransform { self: Erasure =>
   }
 
   def transformMixinInfo(tp: Type): Type = tp match {
-    case ClassInfoType(parents, decls, clazz) =>
+    case ClassInfoType(parents, decls, clazz) if clazz.isPackageClass || !clazz.isJavaDefined =>
       if (clazz.needsImplClass)
         implClass(clazz setFlag lateINTERFACE) // generate an impl class
 

@@ -7,10 +7,18 @@ import org.junit.Assert._
 import CodeGenTools._
 import scala.tools.asm.Opcodes._
 import scala.tools.partest.ASMConverters._
+import scala.tools.testing.ClearAfterClass
+
+object DirectCompileTest extends ClearAfterClass.Clearable {
+  var compiler = newCompiler(extraArgs = "-Ybackend:GenBCode -Yopt:l:method")
+  def clear(): Unit = { compiler = null }
+}
 
 @RunWith(classOf[JUnit4])
-class DirectCompileTest {
-  val compiler = newCompiler(extraArgs = "-Ybackend:GenBCode -Yopt:l:method")
+class DirectCompileTest extends ClearAfterClass {
+  ClearAfterClass.stateToClear = DirectCompileTest
+
+  val compiler = DirectCompileTest.compiler
 
   @Test
   def testCompile(): Unit = {
@@ -20,7 +28,7 @@ class DirectCompileTest {
         |}
       """.stripMargin)
     def s(i: Int, n: Int) = (bytes(i) & 0xff) << n
-    assertTrue((s(0, 24) | s(1, 16) | s(2, 8) | s(3, 0)) == 0xcafebabe) // mocha java latte machiatto surpreme dark roasted espresso
+    assertTrue((s(0, 24) | s(1, 16) | s(2, 8) | s(3, 0)) == 0xcafebabe) // mocha java latte macchiato surpreme dark roasted espresso
   }
 
   @Test
@@ -69,5 +77,22 @@ class DirectCompileTest {
       Op(ARETURN),
       Label(11)
     ))
+  }
+
+  @Test
+  def testSeparateCompilation(): Unit = {
+    val codeA = "class A { def f = 1 }"
+    val codeB = "class B extends A { def g = f }"
+    val List(a, b) = compileClassesSeparately(List(codeA, codeB))
+    val ins = getSingleMethod(b, "g").instructions
+    assert(ins exists {
+      case Invoke(_, "B", "f", _, _) => true
+      case _ => false
+    }, ins)
+  }
+
+  @Test
+  def compileErroneous(): Unit = {
+    compileClasses(compiler)("class C { def f: String = 1 }", allowMessage = _.msg contains "type mismatch")
   }
 }

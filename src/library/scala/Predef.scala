@@ -35,9 +35,9 @@ import scala.io.StdIn
  *  === Assertions ===
  *
  *  A set of `assert` functions are provided for use as a way to document
- *  and dynamically check invariants in code. `assert` statements can be elided
- *  at runtime by providing the command line argument `-Xdisable-assertions` to
- *  the `scala` command.
+ *  and dynamically check invariants in code. Invocations of `assert` can be elided
+ *  at compile time by providing the command line option `-Xdisable-assertions`,
+ *  which raises `-Xelide-below` above `elidable.ASSERTION`, to the `scalac` command.
  *
  *  Variants of `assert` intended for use with static analysis tools are also
  *  provided: `assume`, `require` and `ensuring`. `require` and `ensuring` are
@@ -56,9 +56,9 @@ import scala.io.StdIn
  *  only contain natural numbers (i.e. non-negative), and that the result returned
  *  will also be natural. `require` is distinct from `assert` in that if the
  *  condition fails, then the caller of the function is to blame rather than a
- *  logical error having been made within `addNaturals` itself. `ensures` is a
+ *  logical error having been made within `addNaturals` itself. `ensuring` is a
  *  form of `assert` that declares the guarantee the function is providing with
- *  regards to it's return value.
+ *  regards to its return value.
  *
  *  === Implicit Conversions ===
  *  A number of commonly applied implicit conversions are also defined here, and
@@ -82,10 +82,15 @@ object Predef extends LowPriorityImplicits with DeprecatedPredef {
    */
   def classOf[T]: Class[T] = null // This is a stub method. The actual implementation is filled in by the compiler.
 
+  /** The `String` type in Scala has methods that come either from the underlying
+   *  Java String (see the documentation corresponding to your Java version, for
+   *  example [[http://docs.oracle.com/javase/8/docs/api/java/lang/String.html]]) or
+   *  are added implicitly through [[scala.collection.immutable.StringOps]].
+   */
   type String        = java.lang.String
   type Class[T]      = java.lang.Class[T]
 
-  // miscelleaneous -----------------------------------------------------
+  // miscellaneous -----------------------------------------------------
   scala.`package`                         // to force scala package object to be seen.
   scala.collection.immutable.List         // to force Nil, :: to be seen.
 
